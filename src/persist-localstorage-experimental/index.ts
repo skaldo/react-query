@@ -22,6 +22,12 @@ interface Options {
   buster?: string
 }
 
+interface Storage {
+  getItem: (key: string, callback?: Function) => Promise<string>
+  setItem: (key: string, value: string, callback?: Function) => Promise<void>
+  removeItem: (key: string, callback?: Function) => Promise<void>
+}
+
 export function persistWithLocalStorage(
   queryClient: QueryClient,
   {
@@ -65,6 +71,57 @@ export function persistWithLocalStorage(
     } else {
       localStorage.removeItem(localStorageKey)
     }
+  }
+}
+
+//TODO: documentation
+//TODO: create a wrapper component that hides the app until cache rehydrate
+//TODO: split cache in multiple keys to mitigate issues with max length on Android
+export async function persistWithCustomAsyncStorage(
+  queryClient: QueryClient,
+  storage: Storage,
+  {
+    localStorageKey = `REACT_QUERY_OFFLINE_CACHE`,
+    throttleTime = 1000,
+    maxAge = 1000 * 60 * 60 * 24,
+    buster = '',
+  }: Options = {}
+): Promise<void> {
+  if (!storage) {
+    return
+  }
+  // Subscribe to changes
+  const saveCache = throttle(() => {
+    const storageCache: LocalStorageCache = {
+      buster,
+      timestamp: Date.now(),
+      cacheState: dehydrate(queryClient),
+    }
+
+    storage.setItem(localStorageKey, JSON.stringify(storageCache))
+  }, throttleTime)
+
+  queryClient.getQueryCache().subscribe(saveCache)
+
+  // Attempt restore
+  const cacheStorage = await storage.getItem(localStorageKey)
+
+  if (!cacheStorage) {
+    return
+  }
+
+  const cache: LocalStorageCache = JSON.parse(cacheStorage)
+
+  if (cache.timestamp) {
+    const expired = Date.now() - cache.timestamp > maxAge
+    const busted = cache.buster !== buster
+    if (expired || busted) {
+      storage.removeItem(localStorageKey)
+    } else {
+      hydrate(queryClient, cache.cacheState)
+    }
+  } else {
+    storage.removeItem(localStorageKey)
   }
 }
 
